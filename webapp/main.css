@@ -1,0 +1,32 @@
+body {
+  margin: 0;
+  padding: 0;
+}
+.titleRow {
+  text-align:center;
+  background-color: #eee;
+  padding: 0.2em;
+}
+.timeRow {
+  display: flex;
+  padding: 0.2em;
+  align-items: center;
+}
+.timeRow input {
+  width: 4em;
+  text-align: right;
+}
+.sliders {
+  display: flex;
+  flex-direction: column;
+  padding: .3em 0;
+}
+input {
+  margin: .5em;
+}
+.buttonRow {
+  display: flex;
+  background-color: #eee;
+  justify-content: space-between;
+  padding: 0.2em;
+}
