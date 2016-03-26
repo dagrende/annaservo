@@ -1,8 +1,12 @@
 #include <ESP8266WiFi.h>
 #include <Servo.h>
+#include <EEPROM.h>
 #include "step.h"
 #include "secrets.h"
-
+extern "C"{
+#include "spi_flash.h"
+}
+extern "C" uint32_t _SPIFFS_end;
 #define WEBAPP 0  // use 1 to enable web application serving
 #if WEBAPP
 #include "webapp.h"
@@ -50,9 +54,34 @@ const int MAX_STEPS = 4090 / sizeof(Step);
 
 WiFiServer server(80);
 
-Step currentStep;
-Step steps[MAX_STEPS];
-int stepCount = 0;
+const uint32_t _sector = ((uint32_t)&_SPIFFS_end - 0x40200000) / SPI_FLASH_SEC_SIZE;
+
+struct {
+  Step steps[MAX_STEPS];
+  int stepCount;
+} program __attribute__((aligned(4)));
+
+int saveProgram() {
+  int success = 0;
+  noInterrupts();
+  if(spi_flash_erase_sector(_sector) == SPI_FLASH_RESULT_OK) {
+    if(spi_flash_write(_sector * SPI_FLASH_SEC_SIZE, reinterpret_cast<uint32_t*>(&program), sizeof(program)) == SPI_FLASH_RESULT_OK) {
+      success = 1;
+    }
+  }
+  interrupts();
+  return success;
+}
+
+int restoreProgram() {
+  int success = 0;
+  noInterrupts();
+  if(spi_flash_read(_sector * SPI_FLASH_SEC_SIZE, reinterpret_cast<uint32_t*>(&program), sizeof(program)) == SPI_FLASH_RESULT_OK) {
+    success = 1;
+  }
+  interrupts();
+  return success;
+}
 
 void setup() {
   // assign GPIO pins to bits (arduino numbering standard)
@@ -63,8 +92,12 @@ void setup() {
   servos[4].attach(15);
   servos[5].attach(4);
 
+  program.stepCount = 0;
+
   Serial.begin(115200);
   delay(10);
+
+  EEPROM.begin(4096);
 
   // Connect to WiFi network
   Serial.println();
@@ -82,6 +115,8 @@ void setup() {
   // Start the server
   server.begin();
   Serial.println("Server started");
+
+  restoreProgram();
 
   // Print the IP address
   Serial.print("Use this URL to connect: ");
@@ -153,19 +188,19 @@ void stringToStep(String s, Step &step) {
 
 void printStepsJson(WiFiClient client) {
   client.println("[");
-  for (int i = 0; i < stepCount; i++) {
+  for (int i = 0; i < program.stepCount; i++) {
     client.print("  {\"timeToStep\": ");
-    int t = steps[i].stepTime;
+    int t = program.steps[i].stepTime;
     client.print(t / 10); client.print("."); client.print(t % 10);
     client.print(", \"positions\": [");
     for (int j = 0; j < SERVO_COUNT; j++) {
       if (j > 0) {
         client.print(", ");
       }
-      client.print(steps[i].pos[j]);
+      client.print(program.steps[i].pos[j]);
     }
     client.print("]}");
-    if (i < stepCount - 1) {
+    if (i < program.stepCount - 1) {
       client.print(",");
     }
     client.println("");
@@ -179,6 +214,13 @@ String getRequestQuery(String s) {
   return s.substring(i + 1, j);
 }
 
+void runProgram() {
+  while (1) {
+    for (int i = 0; i < program.stepCount; i++) {
+      program.steps[i].moveTo();
+    }
+  }
+}
 
 int parseIntUntil(String s, int &intResult, int &startI) {
   return parseIntUntil(s, intResult, startI, 0);
@@ -208,7 +250,6 @@ void loop() {
   }
 
   // Wait until the client sends some data
-  Serial.println("new client");
   while(!client.available()){
     delay(1);
   }
@@ -221,13 +262,21 @@ void loop() {
   // Match the request
   String query = getRequestQuery(request);
   if (query.equals("/save")) {
-    
-    httpRespond(client, 200);
+    if (saveProgram()) {
+      httpRespond(client, 200);
+    } else {
+      httpRespond(client, 500);
+    }
   } else if (query.equals("/restore")) {
-    httpRespond(client, 200);
-  } else if (query.equals("/stepcount")) {
+    if (restoreProgram()) {
+      httpRespond(client, 200);
+    } else {
+      httpRespond(client, 500);
+    }
+    httpRespond(client, 500);
+  } else if (query.equals("/stepCount")) {
     httpRespond(client, 200, "application/json");
-    client.println(stepCount);
+    client.println(program.stepCount);
   } else if (query.equals("/steps")) {
     httpRespond(client, 200, "application/json");
     printStepsJson(client);
@@ -237,14 +286,14 @@ void loop() {
     int i = 5;
     if (parseIntUntil(query, stepi, i, '/')
         && parseStringToEnd(query, stepString, i)) {
-      if (0 <= stepi && stepi <= stepCount) {
-        if (stepi < stepCount) {
-          for (int i = stepCount; i > stepi; i--) {
-            steps[i] = steps[i - 1];
+      if (0 <= stepi && stepi <= program.stepCount) {
+        if (stepi < program.stepCount) {
+          for (int i = program.stepCount; i > stepi; i--) {
+            program.steps[i] = program.steps[i - 1];
           }
         }
-        stepCount++;
-        stringToStep(stepString, steps[stepi]);
+        program.stepCount++;
+        stringToStep(stepString, program.steps[stepi]);
         httpRespond(client, 200);
         return;
       }
@@ -255,19 +304,20 @@ void loop() {
     int i = 8;
     if (parseIntUntil(query, stepi, i, '/')
         && parseIntUntil(query, stepn, i)
-        && 0 <= stepi && stepi < stepCount
-        && 0 < stepn && stepi + stepn <= stepCount) {
+        && 0 <= stepi && stepi < program.stepCount
+        && 0 < stepn && stepi + stepn <= program.stepCount) {
       for (int j = 0; j < stepn; j++) {
-        steps[stepi] = steps[stepi + stepn];
+        program.steps[stepi] = program.steps[stepi + stepn];
         stepi++;
       }
-      stepCount -= stepn;
+      program.stepCount -= stepn;
       httpRespond(client, 200);
       return;
     }
     httpRespond(client, 400);
   } else if (query.equals("/run")) {
     httpRespond(client, 200);
+    runProgram();
   } else if (query.startsWith("/set/")) {
     Step step;
     stringToStep(query.substring(5), step);
