@@ -1,5 +1,6 @@
 #include <ESP8266WiFi.h>
 #include <Servo.h>
+#include "step.h"
 #include "secrets.h"
 
 #define WEBAPP 0  // use 1 to enable web application serving
@@ -7,57 +8,43 @@
 #include "webapp.h"
 #endif
 
-const byte SERVO_COUNT = 6;
-const int SERVO_TICK_DELAY_MS = 15;
-
 Servo servos[SERVO_COUNT];
 
 // handles one program step to a set of positions, with timed moves
-class Step {
-  public:
-    int stepTime;  // tenth of seconds
-    byte pos[SERVO_COUNT];
-    Step() {
+Step::Step() {
       stepTime = 0;
       for (int i = 0; i < SERVO_COUNT; i++) {
         pos[i] = 90;
       }
     }
-    Step(const Step &step) {
-      stepTime = step.stepTime;
-      for (int i = 0; i < SERVO_COUNT; i++) {
-        pos[i] = step.pos[i];
-      }
+void Step::moveTo() {
+  if (stepTime == 0) {
+    // no time - go directly to destination
+    for (int i = 0; i < SERVO_COUNT; i++) {
+      servos[i].write(pos[i]);
     }
-    void moveTo() {
-      if (stepTime == 0) {
-        // no time - go directly to destination
-        for (int i = 0; i < SERVO_COUNT; i++) {
-          servos[i].write(pos[i]);
-        }
-      } else {
-        int tickCount = 100L * stepTime / SERVO_TICK_DELAY_MS;
-        struct posDist {
-          float currPos;
-          float tickDist;
-        } posDists[SERVO_COUNT];
+  } else {
+    int tickCount = 100L * stepTime / SERVO_TICK_DELAY_MS;
+    struct posDist {
+      float currPos;
+      float tickDist;
+    } posDists[SERVO_COUNT];
 
-        for (int i = 0; i < SERVO_COUNT; i++) {
-          struct posDist &posDist = posDists[i];
-          posDist.currPos = (float)servos[i].read();
-          posDist.tickDist = (pos[i] - posDist.currPos) / tickCount;
-        }
-        while (tickCount-- > 0) {
-          for (int i = 0; i < SERVO_COUNT; i++) {
-            struct posDist &posDist = posDists[i];
-            posDist.currPos += posDist.tickDist;
-            servos[i].write((int)posDist.currPos);
-          }
-          delay(SERVO_TICK_DELAY_MS);
-        }
-      }
+    for (int i = 0; i < SERVO_COUNT; i++) {
+      struct posDist &posDist = posDists[i];
+      posDist.currPos = (float)servos[i].read();
+      posDist.tickDist = (pos[i] - posDist.currPos) / tickCount;
     }
-};
+    while (tickCount-- > 0) {
+      for (int i = 0; i < SERVO_COUNT; i++) {
+        struct posDist &posDist = posDists[i];
+        posDist.currPos += posDist.tickDist;
+        servos[i].write((int)posDist.currPos);
+      }
+      delay(SERVO_TICK_DELAY_MS);
+    }
+  }
+}
 
 const int MAX_STEPS = 4090 / sizeof(Step);
 
@@ -110,7 +97,7 @@ void httpRespond(WiFiClient client, int status) {
   client.println(""); // mark end of headers
 }
 
-void httpRespond(WiFiClient client, int status, char *contentType) {
+void httpRespond(WiFiClient client, int status, const char *contentType) {
   client.print("HTTP/1.1 ");
   client.print(status);
   client.println(" OK");
@@ -146,7 +133,7 @@ void stringToStep(String s, Step &step) {
   int i = 0, j;
   j = s.indexOf(',', i);
   if (i < j) {
-    float t = s.substring(i, j).toFloat();    
+    float t = s.substring(i, j).toFloat();
     step.stepTime = (int)(t * 10 + 0.5);
   }
   i = j + 1;
@@ -193,8 +180,12 @@ String getRequestQuery(String s) {
 }
 
 
+int parseIntUntil(String s, int &intResult, int &startI) {
+  return parseIntUntil(s, intResult, startI, 0);
+}
+
 int parseIntUntil(String s, int &intResult, int &startI, char endChar) {
-  int i = s.indexOf('/', startI);
+  int i = endChar == 0 ? s.length() : s.indexOf(endChar, startI);
   if (i != -1) {
     intResult = s.substring(startI, i).toInt();
     startI = i + 1;
@@ -229,7 +220,12 @@ void loop() {
 
   // Match the request
   String query = getRequestQuery(request);
-  if (query.equals("/stepcount")) {
+  if (query.equals("/save")) {
+    
+    httpRespond(client, 200);
+  } else if (query.equals("/restore")) {
+    httpRespond(client, 200);
+  } else if (query.equals("/stepcount")) {
     httpRespond(client, 200, "application/json");
     client.println(stepCount);
   } else if (query.equals("/steps")) {
@@ -249,20 +245,34 @@ void loop() {
         }
         stepCount++;
         stringToStep(stepString, steps[stepi]);
-        httpRespond(client, 201);
+        httpRespond(client, 200);
         return;
       }
     }
-    httpRespond(client, 500);
+    httpRespond(client, 400);
   } else if (query.startsWith("/remove/")) {
-    httpRespond(client, 201);
+    int stepi, stepn;
+    int i = 8;
+    if (parseIntUntil(query, stepi, i, '/')
+        && parseIntUntil(query, stepn, i)
+        && 0 <= stepi && stepi < stepCount
+        && 0 < stepn && stepi + stepn <= stepCount) {
+      for (int j = 0; j < stepn; j++) {
+        steps[stepi] = steps[stepi + stepn];
+        stepi++;
+      }
+      stepCount -= stepn;
+      httpRespond(client, 200);
+      return;
+    }
+    httpRespond(client, 400);
   } else if (query.equals("/run")) {
-    httpRespond(client, 201);
+    httpRespond(client, 200);
   } else if (query.startsWith("/set/")) {
     Step step;
     stringToStep(query.substring(5), step);
     step.moveTo();
-    httpRespond(client, 201);
+    httpRespond(client, 200);
 #if WEBAPP
   } else {
     String path = request.substring(4, request.length() - 9);
