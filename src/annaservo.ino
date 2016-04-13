@@ -1,18 +1,29 @@
 #include <ESP8266WiFi.h>
 #include <Servo.h>
-#include <EEPROM.h>
 #include "step.h"
 #include "secrets.h"
 extern "C"{
 #include "spi_flash.h"
 }
 extern "C" uint32_t _SPIFFS_end;
+
 #define WEBAPP 0  // use 1 to enable web application serving
 #if WEBAPP
 #include "webapp.h"
 #endif
 
 Servo servos[SERVO_COUNT];
+int otaMode = 0;
+const int MAX_STEPS = 4090 / sizeof(Step);
+const uint32_t _sector = ((uint32_t)&_SPIFFS_end - 0x40200000) / SPI_FLASH_SEC_SIZE;
+WiFiServer server(80);
+int runMode = false;
+int nextStep = 0;
+
+
+Servo myservo;
+
+int pos = 0;    // variable to store the servo position
 
 // handles one program step to a set of positions, with timed moves
 Step::Step() {
@@ -50,19 +61,18 @@ void Step::moveTo() {
   }
 }
 
-const int MAX_STEPS = 4090 / sizeof(Step);
-
-WiFiServer server(80);
-
-const uint32_t _sector = ((uint32_t)&_SPIFFS_end - 0x40200000) / SPI_FLASH_SEC_SIZE;
-
+const long programMagicNumber = 671349586L; // used to check if flash data is a program saved by this app
 struct {
+  long magicNumber;
+  int formatVersion;
   Step steps[MAX_STEPS];
   int stepCount;
 } program __attribute__((aligned(4)));
 
 int saveProgram() {
   int success = 0;
+  program.magicNumber = programMagicNumber;
+  program.formatVersion = 1;
   noInterrupts();
   if(spi_flash_erase_sector(_sector) == SPI_FLASH_RESULT_OK) {
     if(spi_flash_write(_sector * SPI_FLASH_SEC_SIZE, reinterpret_cast<uint32_t*>(&program), sizeof(program)) == SPI_FLASH_RESULT_OK) {
@@ -77,52 +87,35 @@ int restoreProgram() {
   int success = 0;
   noInterrupts();
   if(spi_flash_read(_sector * SPI_FLASH_SEC_SIZE, reinterpret_cast<uint32_t*>(&program), sizeof(program)) == SPI_FLASH_RESULT_OK) {
-    success = 1;
+    if (program.magicNumber == programMagicNumber) {
+      success = 1;
+    } else {
+      // flash did not contain a valid program - clear it
+      Serial.println("restoreProgram: not valid program in flash");
+      program.stepCount = 0;
+      program.formatVersion = 1;
+    }
   }
   interrupts();
   return success;
 }
 
-void setup() {
-  // assign GPIO pins to bits (arduino numbering standard)
+void attachServos() {
   servos[0].attach(16);
   servos[1].attach(14);
   servos[2].attach(12);
   servos[3].attach(13);
   servos[4].attach(15);
   servos[5].attach(4);
+}
 
-  program.stepCount = 0;
-
-  Serial.begin(115200);
-  delay(10);
-
-  EEPROM.begin(4096);
-
-  // Connect to WiFi network
-  Serial.println();
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
-
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.begin(ssid, password);
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-
-  // Start the server
-  server.begin();
-  Serial.println("Server started");
-
-  restoreProgram();
-
-  // Print the IP address
-  Serial.print("Use this URL to connect: ");
-  Serial.print("http://");
-  Serial.print(WiFi.localIP());
-  Serial.println("/");
+void detachServos() {
+  servos[0].detach();
+  servos[1].detach();
+  servos[2].detach();
+  servos[3].detach();
+  servos[4].detach();
+  servos[5].detach();
 }
 
 void httpRespond(WiFiClient client, int status) {
@@ -242,12 +235,44 @@ int parseStringToEnd(String s, String &stringResult, int &startI) {
   return 1;
 }
 
+void setup() {
+  program.stepCount = 0;
+
+  Serial.begin(115200);
+  Serial.println("\nBooting");
+
+  WiFi.mode(WIFI_STA);    // guarantee gap free movements
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("Ready");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+
+  attachServos();
+//  myservo.attach(16);  // attaches the servo to a GPIO pin
+}
+
 void loop() {
-  // Check if a client has connected
+  // for (pos = 0; pos <= 180; pos += 1) { // goes from 0 degrees to 180 degrees
+  //   // in steps of 1 degree
+  //   myservo.write(pos);              // tell servo to go to position in variable 'pos'
+  //   delay(15);                       // waits 15ms for the servo to reach the position
+  // }
+  // for (pos = 180; pos >= 0; pos -= 1) { // goes from 180 degrees to 0 degrees
+  //   myservo.write(pos);              // tell servo to go to position in variable 'pos'
+  //   delay(15);                       // waits 15ms for the servo to reach the position
+  // }
+
+  //Check if a client has connected
   WiFiClient client = server.available();
   if (!client) {
     return;
   }
+
 
   // Wait until the client sends some data
   while(!client.available()){
@@ -273,7 +298,6 @@ void loop() {
     } else {
       httpRespond(client, 500);
     }
-    httpRespond(client, 500);
   } else if (query.equals("/stepCount")) {
     httpRespond(client, 200, "application/json");
     client.println(program.stepCount);
@@ -317,7 +341,7 @@ void loop() {
     httpRespond(client, 400);
   } else if (query.equals("/run")) {
     httpRespond(client, 200);
-    runProgram();
+    runMode = true;
   } else if (query.startsWith("/set/")) {
     Step step;
     stringToStep(query.substring(5), step);
