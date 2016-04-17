@@ -1,4 +1,6 @@
 #include <ESP8266WiFi.h>
+#include <WiFiClient.h>
+#include <ESP8266WebServer.h>
 #include <Servo.h>
 #include "step.h"
 #include "secrets.h"
@@ -12,11 +14,11 @@ extern "C" uint32_t _SPIFFS_end;
 #include "webapp.h"
 #endif
 
+ESP8266WebServer server(80);
 Servo servos[SERVO_COUNT];
 int otaMode = 0;
 const int MAX_STEPS = 4090 / sizeof(Step);
 const uint32_t _sector = ((uint32_t)&_SPIFFS_end - 0x40200000) / SPI_FLASH_SEC_SIZE;
-WiFiServer server(80);
 int runMode = false;
 int nextStep = 0;
 
@@ -235,76 +237,13 @@ int parseStringToEnd(String s, String &stringResult, int &startI) {
   return 1;
 }
 
-void setup() {
-  program.stepCount = 0;
-
-  Serial.begin(115200);
-  Serial.println("\nBooting");
-
-  WiFi.mode(WIFI_STA);    // guarantee gap free movements
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-
-  Serial.println("Ready");
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
-
-  attachServos();
-//  myservo.attach(16);  // attaches the servo to a GPIO pin
+void handleRoot() {
+  server.send(200, "text/plain", "hello from esp8266!");
 }
 
-void loop() {
-  // for (pos = 0; pos <= 180; pos += 1) { // goes from 0 degrees to 180 degrees
-  //   // in steps of 1 degree
-  //   myservo.write(pos);              // tell servo to go to position in variable 'pos'
-  //   delay(15);                       // waits 15ms for the servo to reach the position
-  // }
-  // for (pos = 180; pos >= 0; pos -= 1) { // goes from 180 degrees to 0 degrees
-  //   myservo.write(pos);              // tell servo to go to position in variable 'pos'
-  //   delay(15);                       // waits 15ms for the servo to reach the position
-  // }
-
-  //Check if a client has connected
-  WiFiClient client = server.available();
-  if (!client) {
-    return;
-  }
-
-
-  // Wait until the client sends some data
-  while(!client.available()){
-    delay(1);
-  }
-
-  // Read the first line of the request
-  String request = client.readStringUntil('\r');
-  Serial.println(request);
-  client.flush();
-
-  // Match the request
-  String query = getRequestQuery(request);
-  if (query.equals("/save")) {
-    if (saveProgram()) {
-      httpRespond(client, 200);
-    } else {
-      httpRespond(client, 500);
-    }
-  } else if (query.equals("/restore")) {
-    if (restoreProgram()) {
-      httpRespond(client, 200);
-    } else {
-      httpRespond(client, 500);
-    }
-  } else if (query.equals("/stepCount")) {
-    httpRespond(client, 200, "application/json");
-    client.println(program.stepCount);
-  } else if (query.equals("/steps")) {
-    httpRespond(client, 200, "application/json");
-    printStepsJson(client);
-  } else if (query.startsWith("/add/")) {
+void handleNotFound(){
+  String query = server.uri();
+  if (query.startsWith("/add/")) {
     int stepi;
     String stepString;
     int i = 5;
@@ -318,12 +257,13 @@ void loop() {
         }
         program.stepCount++;
         stringToStep(stepString, program.steps[stepi]);
-        httpRespond(client, 200);
+        server.send(200);
         return;
       }
     }
-    httpRespond(client, 400);
-  } else if (query.startsWith("/remove/")) {
+    server.send(400);
+  }
+  else if (query.startsWith("/remove/")) {
     int stepi, stepn;
     int i = 8;
     if (parseIntUntil(query, stepi, i, '/')
@@ -335,22 +275,94 @@ void loop() {
         stepi++;
       }
       program.stepCount -= stepn;
-      httpRespond(client, 200);
+      server.send(200);
       return;
     }
-    httpRespond(client, 400);
-  } else if (query.equals("/run")) {
-    httpRespond(client, 200);
-    runMode = true;
+    server.send(400);
   } else if (query.startsWith("/set/")) {
     Step step;
     stringToStep(query.substring(5), step);
     step.moveTo();
-    httpRespond(client, 200);
+    server.send(200);
 #if WEBAPP
   } else {
     String path = request.substring(4, request.length() - 9);
-    loadFromFlash(client, path);
+    loadFromFlash(server.client(), path);
 #endif
+  }
+}
+
+void setup() {
+  attachServos();
+  restoreProgram();
+  runMode = true;
+
+  Serial.begin(115200);
+  Serial.println("\nBooting");
+
+  return;
+
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("Ready");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+
+
+  server.on("/", handleRoot);
+
+  server.on("/inline", [](){
+    server.send(200, "text/plain", "this works as well");
+  });
+
+  server.on("/stepCount", [](){
+    server.send(200, "text/plain", String(program.stepCount));
+  });
+
+  server.on("/save", [](){
+    server.send(saveProgram() ? 200 : 500);
+  });
+
+  server.on("/restore", [](){
+    server.send(restoreProgram() ? 200 : 500);
+  });
+
+  server.on("/run", [](){
+    WiFi.mode(WIFI_OFF);    // guarantee gap free movements
+    runMode = true;
+    //server.send(200);
+  });
+
+  server.on("/stop", [](){
+    runMode = false;
+    server.send(200);
+  });
+
+  server.on("/steps", [](){
+    WiFiClient client = server.client();
+    httpRespond(client, 200, "application/json");
+    printStepsJson(client);
+  });
+
+  server.onNotFound(handleNotFound);
+
+  server.begin();
+  Serial.println("HTTP server started");
+
+}
+
+
+void loop() {
+  if (runMode && program.stepCount > 0) {
+    if (nextStep >= program.stepCount) {
+      nextStep = 0;
+    }
+    program.steps[nextStep++].moveTo();
+  } else {
+    server.handleClient();
   }
 }
