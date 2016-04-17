@@ -293,14 +293,8 @@ void handleNotFound(){
 }
 
 void setup() {
-  attachServos();
-  restoreProgram();
-  runMode = true;
-
   Serial.begin(115200);
   Serial.println("\nBooting");
-
-  return;
 
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
@@ -331,8 +325,7 @@ void setup() {
     server.send(restoreProgram() ? 200 : 500);
   });
 
-  server.on("/run", [](){
-    WiFi.mode(WIFI_OFF);    // guarantee gap free movements
+  server.on("/start", [](){
     runMode = true;
     //server.send(200);
   });
@@ -353,16 +346,18 @@ void setup() {
   server.begin();
   Serial.println("HTTP server started");
 
+  attachServos();
+  restoreProgram();
+  runMode = true;
 }
 
 
 void loop() {
+  server.handleClient();
   if (runMode && program.stepCount > 0) {
     if (nextStep >= program.stepCount) {
       nextStep = 0;
     }
     program.steps[nextStep++].moveTo();
-  } else {
-    server.handleClient();
   }
 }
