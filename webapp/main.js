@@ -1,3 +1,7 @@
+function getAbsUrl(relativeUrl) {
+  return "http://192.168.0.20" + relativeUrl;
+}
+
 var stepHandler = stepsSimulator();
 
 var body = d3.select('body');
@@ -15,6 +19,15 @@ buttonRow.append('button').attr({id: 'prevButton', title: 'Previous step'}).on('
 buttonRow.append('button').attr({id: 'addButton', title: 'Add'}).on('click', stepHandler.addStep).text('+');
 buttonRow.append('button').attr({id: 'deleteButton', title: 'Delete'}).on('click', stepHandler.deleteStep).text('-');
 buttonRow.append('button').attr({id: 'nextButton', title: 'Next step'}).on('click', stepHandler.toNextStep).text('>');
+
+d3.json(getAbsUrl('/steps'), function(error, json) {
+  if (error) {
+    console.log(error);
+  } else {
+    console.log(json);
+    stepHandler.setSteps(json);
+  }
+});
 
 function renderSliders() {
   titleRow.text('Step ' + (stepHandler.currentStepIndex + 1) + ' of ' + stepHandler.steps.length);
@@ -34,7 +47,15 @@ function renderSliders() {
 }
 
 function sendStep(step) {
-  d3.xhr('/set/' + step.timeToStep + ',' + step.positions.join(',')).get(function(error) {console.log(error);});
+  d3.json(getAbsUrl('/set/' + step.timeToStep + ',' + step.positions.join(',')),
+    function(error, json) {
+      if (error) {
+        console.log(error);
+      } else {
+        console.log(json);
+      }
+    }
+  );
 }
 
 stepHandler.on('step', function() {
@@ -77,6 +98,16 @@ function stepsSimulator() {
         state.steps.splice(state.currentStepIndex, 1);
         if (state.currentStepIndex >= state.steps.length) {
           state.currentStepIndex = state.steps.length - 1;
+        }
+        fireEvent('step');
+      }
+    },
+    setSteps: function(steps) {
+      if (steps) {
+        state.steps = steps;
+        state.currentStepIndex = 0;
+        if (state.steps.length == 0) {
+          state.steps.push({timeToStep: 0, positions: [90, 90, 90, 90, 90, 90]});
         }
         fireEvent('step');
       }

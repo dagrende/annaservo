@@ -1,0 +1,6 @@
+cd  ~/platformio/packages
+rm -rf framework-arduinoespressif/
+git clone https://github.com/esp8266/Arduino.git framework-arduinoespressif
+cd framework-arduinoespressif/
+git checkout tags/2.0.0
+echo 2.0.0 >version.txt

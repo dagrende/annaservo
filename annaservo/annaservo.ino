@@ -124,6 +124,7 @@ void httpRespond(WiFiClient client, int status) {
   client.print("HTTP/1.1 ");
   client.print(status);
   client.println(" OK");
+  client.println("Access-Control-Allow-Origin: *");
   client.println(""); // mark end of headers
 }
 
@@ -132,6 +133,7 @@ void httpRespond(WiFiClient client, int status, const char *contentType) {
   client.print(status);
   client.println(" OK");
   client.print("Content-Type: "); client.println(contentType);
+  client.println("Access-Control-Allow-Origin: *");
   client.println(""); // mark end of headers
 }
 
@@ -241,6 +243,15 @@ void handleRoot() {
   server.send(200, "text/plain", "hello from esp8266!");
 }
 
+void logRequest() {
+  Serial.println(server.uri());
+  for (int i = 0; i < server.headers(); i++) {
+    Serial.print(server.headerName(i));
+    Serial.print(": ");
+    Serial.print(server.header(i));
+  }
+}
+
 void handleNotFound(){
   String query = server.uri();
   if (query.startsWith("/add/")) {
@@ -280,10 +291,21 @@ void handleNotFound(){
     }
     server.send(400);
   } else if (query.startsWith("/set/")) {
+    logRequest();
+
     Step step;
     stringToStep(query.substring(5), step);
     step.moveTo();
-    server.send(200);
+    server.send(200, "application/json", "1");
+    // WiFiClient client = server.client();
+    // client.print("HTTP/1.1 ");
+    // client.print(200);
+    // client.println(" OK");
+    // client.println("Access-Control-Allow-Origin: *");
+    // client.println("Content-Length: 1");
+    // client.println("Content-Type: app");
+    // client.println(""); // mark end of headers
+    // client.print("0");
 #if WEBAPP
   } else {
     String path = request.substring(4, request.length() - 9);
