@@ -18,8 +18,11 @@ var buttonRow = body.append('div').attr('class', 'buttonRow');
 buttonRow.append('button').attr({id: 'prevButton', title: 'Previous step'}).on('click', stepHandler.toPreviousStep).text('<');
 buttonRow.append('button').attr({id: 'addButton', title: 'Add'}).on('click', stepHandler.addStep).text('+');
 buttonRow.append('button').attr({id: 'deleteButton', title: 'Delete'}).on('click', stepHandler.deleteStep).text('-');
+buttonRow.append('button').attr({id: 'startButton', title: 'Start'}).on('click', d3json('/start')).text('start');
+buttonRow.append('button').attr({id: 'stopButton', title: 'Stop'}).on('click', d3json('/stop')).text('stop');
 buttonRow.append('button').attr({id: 'nextButton', title: 'Next step'}).on('click', stepHandler.toNextStep).text('>');
 
+// load program from board
 d3.json(getAbsUrl('/steps'), function(error, json) {
   if (error) {
     console.log(error);
@@ -46,8 +49,8 @@ function renderSliders() {
   });
 }
 
-function sendStep(step) {
-  d3.json(getAbsUrl('/set/' + step.timeToStep + ',' + step.positions.join(',')),
+function d3json(relativeUrl) {
+  d3.json(getAbsUrl(relativeUrl),
     function(error, json) {
       if (error) {
         console.log(error);
@@ -56,6 +59,9 @@ function sendStep(step) {
       }
     }
   );
+}
+function sendStep(step) {
+  d3json('/set/' + step.timeToStep + ',' + step.positions.join(','));
 }
 
 stepHandler.on('step', function() {
@@ -92,6 +98,7 @@ function stepsSimulator() {
       state.steps.splice(state.currentStepIndex + 1, 0, {timeToStep: step.timeToStep, positions: step.positions.slice()});
       state.currentStepIndex++;
       fireEvent('step');
+      d3json('/add/' + currentStepIndex + '/')
     },
     deleteStep: function() {
       if (state.steps.length > 1) {
@@ -107,13 +114,14 @@ function stepsSimulator() {
         state.steps = steps;
         state.currentStepIndex = 0;
         if (state.steps.length == 0) {
+          // add a first step
           state.steps.push({timeToStep: 0, positions: [90, 90, 90, 90, 90, 90]});
+        } else {
+          // duplicate first step to get the experiment step
+          state.steps.splice(0, 0, {timeToStep: state.steps[0].timeToStep, positions: state.steps[0].positions.slice(0)});
         }
         fireEvent('step');
       }
-    },
-    save: function(values) {
-        console.log('save',values);
     },
     on: function(type, listener) {
       var listeners = eventListeners[type];

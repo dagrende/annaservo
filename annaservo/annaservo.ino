@@ -161,7 +161,7 @@ bool loadFromFlash(WiFiClient &client, String path) {
 // convert string representation into referenced Step
 // s is t,p,p,p,p,p,p,p
 // omittes numbers are not set
-void stringToStep(String s, Step &step) {
+int stringToStep(String s, Step &step) {
   int i = 0, j;
   j = s.indexOf(',', i);
   if (i < j) {
@@ -181,6 +181,7 @@ void stringToStep(String s, Step &step) {
       i = j + 1;
     }
   }
+  return true;
 }
 
 void printStepsJson(WiFiClient client) {
@@ -255,6 +256,8 @@ void logRequest() {
 void handleNotFound(){
   String query = server.uri();
   if (query.startsWith("/add/")) {
+    // /add/i/t,p,p,p,p,p,p
+    // inserts a new step at specified pos
     int stepi;
     String stepString;
     int i = 5;
@@ -291,21 +294,28 @@ void handleNotFound(){
     }
     server.send(400);
   } else if (query.startsWith("/set/")) {
+    // move all positions to specified value at specified time
+    logRequest();
+
+    int stepi, stepn;
+    Step step;
+    int i = 5;
+    if (parseIntUntil(query, stepi, i, '/')
+        && 0 <= stepi && stepi < program.stepCount
+        && stringToStep(query.substring(i), step)) {
+      program.steps[stepi] = step;
+      server.send(200, "application/json", "1");
+    } else {
+      server.send(500, "application/json", "\"invalid step index\"");
+    }
+  } else if (query.startsWith("/move/")) {
+    // move all positions to specified value at specified time
     logRequest();
 
     Step step;
     stringToStep(query.substring(5), step);
     step.moveTo();
     server.send(200, "application/json", "1");
-    // WiFiClient client = server.client();
-    // client.print("HTTP/1.1 ");
-    // client.print(200);
-    // client.println(" OK");
-    // client.println("Access-Control-Allow-Origin: *");
-    // client.println("Content-Length: 1");
-    // client.println("Content-Type: app");
-    // client.println(""); // mark end of headers
-    // client.print("0");
 #if WEBAPP
   } else {
     String path = request.substring(4, request.length() - 9);
