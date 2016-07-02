@@ -35,9 +35,11 @@ Step::Step() {
       }
     }
 void Step::moveTo() {
+  // Serial.print("moveTo pos");
   if (stepTime == 0) {
     // no time - go directly to destination
     for (int i = 0; i < SERVO_COUNT; i++) {
+      // Serial.print(" "); Serial.print(pos[i]);
       servos[i].write(pos[i]);
     }
   } else {
@@ -48,10 +50,12 @@ void Step::moveTo() {
     } posDists[SERVO_COUNT];
 
     for (int i = 0; i < SERVO_COUNT; i++) {
+      // Serial.print(" "); Serial.print(pos[i]);
       struct posDist &posDist = posDists[i];
       posDist.currPos = (float)servos[i].read();
       posDist.tickDist = (pos[i] - posDist.currPos) / tickCount;
     }
+    // Serial.print(" in "); Serial.print(stepTime / 10.0); Serial.print("s");
     while (tickCount-- > 0) {
       for (int i = 0; i < SERVO_COUNT; i++) {
         struct posDist &posDist = posDists[i];
@@ -61,6 +65,7 @@ void Step::moveTo() {
       delay(SERVO_TICK_DELAY_MS);
     }
   }
+  // Serial.println(" ");
 }
 
 const long programMagicNumber = 671349586L; // used to check if flash data is a program saved by this app
@@ -93,7 +98,7 @@ int restoreProgram() {
       success = 1;
     } else {
       // flash did not contain a valid program - clear it
-      Serial.println("restoreProgram: not valid program in flash");
+      // Serial.println("restoreProgram: not valid program in flash");
       program.stepCount = 0;
       program.formatVersion = 1;
     }
@@ -103,15 +108,17 @@ int restoreProgram() {
 }
 
 void attachServos() {
-  servos[0].attach(16);
-  servos[1].attach(14);
+  // Serial.println("attachServos");
+  servos[0].attach(15);
+  servos[1].attach(13);
   servos[2].attach(12);
-  servos[3].attach(13);
-  servos[4].attach(15);
-  servos[5].attach(4);
+  servos[3].attach(14);
+  servos[4].attach(16);
+  servos[5].attach(5);
 }
 
 void detachServos() {
+  // Serial.println("detachServos");
   servos[0].detach();
   servos[1].detach();
   servos[2].detach();
@@ -163,14 +170,17 @@ bool loadFromFlash(WiFiClient &client, String path) {
 // omittes numbers are not set
 int stringToStep(String s, Step &step) {
   int i = 0, j;
+  // parse time (float) terminated by comma
   j = s.indexOf(',', i);
   if (i < j) {
     float t = s.substring(i, j).toFloat();
     step.stepTime = (int)(t * 10 + 0.5);
   }
   i = j + 1;
+  // get each servo position
   for (int posi = 0; posi < SERVO_COUNT; posi++) {
     if (j < s.length()) {
+      // parse position (int) terminated by comma or end of string
       j = s.indexOf(',', i);
       if (j == -1) {
         j = s.length();
@@ -245,11 +255,11 @@ void handleRoot() {
 }
 
 void logRequest() {
-  Serial.println(server.uri());
+  // Serial.println(server.uri());
   for (int i = 0; i < server.headers(); i++) {
-    Serial.print(server.headerName(i));
-    Serial.print(": ");
-    Serial.print(server.header(i));
+    // Serial.print(server.headerName(i));
+    // Serial.print(": ");
+    // Serial.print(server.header(i));
   }
 }
 
@@ -325,46 +335,42 @@ void handleNotFound(){
 }
 
 void setup() {
-  Serial.begin(115200);
-  Serial.println("\nBooting");
+  // Serial.begin(115200);
+  // Serial.println("\nBooting");
 
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
-    Serial.print(".");
+    // Serial.print(".");
   }
 
-  Serial.println("Ready");
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
+  // Serial.println("Ready");
+  // Serial.print("IP address: ");
+  // Serial.println(WiFi.localIP());
 
 
   server.on("/", handleRoot);
-
-  server.on("/inline", [](){
-    server.send(200, "text/plain", "this works as well");
-  });
 
   server.on("/stepCount", [](){
     server.send(200, "text/plain", String(program.stepCount));
   });
 
   server.on("/save", [](){
-    server.send(saveProgram() ? 200 : 500);
+    server.send(saveProgram() ? 200 : 500, "application/json", "1");
   });
 
   server.on("/restore", [](){
-    server.send(restoreProgram() ? 200 : 500);
+    server.send(restoreProgram() ? 200 : 500, "application/json", "1");
   });
 
   server.on("/start", [](){
     runMode = true;
-    //server.send(200);
+    server.send(200, "application/json", "1");
   });
 
   server.on("/stop", [](){
     runMode = false;
-    server.send(200);
+    server.send(200, "application/json", "1");
   });
 
   server.on("/steps", [](){
@@ -376,7 +382,7 @@ void setup() {
   server.onNotFound(handleNotFound);
 
   server.begin();
-  Serial.println("HTTP server started");
+  // Serial.println("HTTP server started");
 
   attachServos();
   restoreProgram();

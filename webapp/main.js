@@ -1,5 +1,9 @@
+var params = getUrlParams(document.location.href);
+console.log(params);
+
+d3json('/stop');
 function getAbsUrl(relativeUrl) {
-  return "http://192.168.0.20" + relativeUrl;
+  return (params['server'] || '') + relativeUrl;
 }
 
 var stepHandler = stepsSimulator();
@@ -18,8 +22,8 @@ var buttonRow = body.append('div').attr('class', 'buttonRow');
 buttonRow.append('button').attr({id: 'prevButton', title: 'Previous step'}).on('click', stepHandler.toPreviousStep).text('<');
 buttonRow.append('button').attr({id: 'addButton', title: 'Add'}).on('click', stepHandler.addStep).text('+');
 buttonRow.append('button').attr({id: 'deleteButton', title: 'Delete'}).on('click', stepHandler.deleteStep).text('-');
-buttonRow.append('button').attr({id: 'startButton', title: 'Start'}).on('click', d3json('/start')).text('start');
-buttonRow.append('button').attr({id: 'stopButton', title: 'Stop'}).on('click', d3json('/stop')).text('stop');
+buttonRow.append('button').attr({id: 'startButton', title: 'Start'}).on('click', function() {d3json('/start')}).text('start');
+buttonRow.append('button').attr({id: 'stopButton', title: 'Stop'}).on('click', function() {d3json('/stop')}).text('stop');
 buttonRow.append('button').attr({id: 'nextButton', title: 'Next step'}).on('click', stepHandler.toNextStep).text('>');
 
 // load program from board
@@ -28,7 +32,7 @@ d3.json(getAbsUrl('/steps'), function(error, json) {
     console.log(error);
   } else {
     console.log(json);
-    stepHandler.setSteps(json);
+    //stepHandler.setSteps(json);
   }
 });
 
@@ -61,7 +65,7 @@ function d3json(relativeUrl) {
   );
 }
 function sendStep(step) {
-  d3json('/set/' + step.timeToStep + ',' + step.positions.join(','));
+  d3json('/move/' + step.timeToStep + ',' + step.positions.join(','));
 }
 
 stepHandler.on('step', function() {
@@ -133,4 +137,18 @@ function stepsSimulator() {
     }
   };
   return state;
+}
+
+function getUrlParams(uri) {
+  var urlParams = {};
+  if (window.location.search) {
+    var match,
+      pl     = /\+/g,  // Regex for replacing addition symbol with a space
+      search = /([^&=]+)=?([^&]*)/g,
+      decode = function (s) { return decodeURIComponent(s.replace(pl, " ")); },
+      query  = window.location.search.substring(1);
+    while (match = search.exec(query))
+       urlParams[decode(match[1])] = decode(match[2]);
+  }
+  return urlParams;
 }
