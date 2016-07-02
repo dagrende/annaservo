@@ -281,7 +281,7 @@ void handleNotFound(){
         }
         program.stepCount++;
         stringToStep(stepString, program.steps[stepi]);
-        server.send(200);
+        server.send(200, "application/json", "1");
         return;
       }
     }
@@ -299,7 +299,7 @@ void handleNotFound(){
         stepi++;
       }
       program.stepCount -= stepn;
-      server.send(200);
+      server.send(200, "application/json", "1");
       return;
     }
     server.send(400);
@@ -335,18 +335,19 @@ void handleNotFound(){
 }
 
 void setup() {
-  // Serial.begin(115200);
-  // Serial.println("\nBooting");
+  Serial.begin(115200);
+  while (!Serial) {}  // wait for serial ready
+  Serial.println("\nBooting");
 
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
-    // Serial.print(".");
+    Serial.print(".");
   }
 
-  // Serial.println("Ready");
-  // Serial.print("IP address: ");
-  // Serial.println(WiFi.localIP());
+  Serial.println("Ready");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
 
 
   server.on("/", handleRoot);
