@@ -9,7 +9,7 @@ extern "C"{
 }
 extern "C" uint32_t _SPIFFS_end;
 
-#define WEBAPP 0  // use 1 to enable web application serving
+#define WEBAPP true  // use 1 to enable web application serving
 #if WEBAPP
 #include "webapp.h"
 #endif
@@ -145,7 +145,7 @@ void httpRespond(WiFiClient client, int status, const char *contentType) {
 }
 
 #if WEBAPP
-bool loadFromFlash(WiFiClient &client, String path) {
+bool loadFromFlash(WiFiClient client, String path) {
   if (path.endsWith("/")) path += "index.html";
   int NumFiles = sizeof(files)/sizeof(struct t_websitefiles);
   for (int i=0; i<NumFiles; i++) {
@@ -251,16 +251,8 @@ int parseStringToEnd(String s, String &stringResult, int &startI) {
 }
 
 void handleRoot() {
-  server.send(200, "text/plain", "hello from esp8266!");
-}
-
-void logRequest() {
-  // Serial.println(server.uri());
-  for (int i = 0; i < server.headers(); i++) {
-    // Serial.print(server.headerName(i));
-    // Serial.print(": ");
-    // Serial.print(server.header(i));
-  }
+  server.sendHeader("Location", "/index.html");
+  server.send(301);//, "text/plain", "hello from esp8266!");
 }
 
 void handleNotFound(){
@@ -305,8 +297,6 @@ void handleNotFound(){
     server.send(400);
   } else if (query.startsWith("/set/")) {
     // move all positions to specified value at specified time
-    logRequest();
-
     int stepi, stepn;
     Step step;
     int i = 5;
@@ -320,15 +310,14 @@ void handleNotFound(){
     }
   } else if (query.startsWith("/move/")) {
     // move all positions to specified value at specified time
-    logRequest();
-
     Step step;
     stringToStep(query.substring(5), step);
     step.moveTo();
     server.send(200, "application/json", "1");
 #if WEBAPP
   } else {
-    String path = request.substring(4, request.length() - 9);
+    String path = query.substring(1);
+    Serial.println(path);
     loadFromFlash(server.client(), path);
 #endif
   }
@@ -339,8 +328,12 @@ void setup() {
   while (!Serial) {}  // wait for serial ready
   Serial.println("\nBooting");
 
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.softAP("annaservo", "hosianna");
   WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
+
+  int n = 5;
+  while (WiFi.status() != WL_CONNECTED && n-- > 0) {
     delay(500);
     Serial.print(".");
   }
