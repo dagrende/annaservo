@@ -1,24 +1,16 @@
 #include <ESP8266WiFi.h>
 #include <WiFiClient.h>
-#include <ESP8266WebServer.h>
+#include <FS.h>
+#include <Hash.h>
+#include <ESPAsyncWebServer.h>
 #include <Servo.h>
 #include "step.h"
 #include "secrets.h"
-extern "C"{
-#include "spi_flash.h"
-}
-extern "C" uint32_t _SPIFFS_end;
 
-#define WEBAPP 0  // use 1 to enable web application serving
-#if WEBAPP
-#include "webapp.h"
-#endif
-
-ESP8266WebServer server(80);
+AsyncWebServer webServer(80);
 Servo servos[SERVO_COUNT];
 int otaMode = 0;
-const int MAX_STEPS = 4090 / sizeof(Step);
-const uint32_t _sector = ((uint32_t)&_SPIFFS_end - 0x40200000) / SPI_FLASH_SEC_SIZE;
+const int MAX_STEPS = 2040 / sizeof(Step);
 int runMode = false;
 int nextStep = 0;
 
@@ -78,32 +70,32 @@ struct {
 
 int saveProgram() {
   int success = 0;
-  program.magicNumber = programMagicNumber;
-  program.formatVersion = 1;
-  noInterrupts();
-  if(spi_flash_erase_sector(_sector) == SPI_FLASH_RESULT_OK) {
-    if(spi_flash_write(_sector * SPI_FLASH_SEC_SIZE, reinterpret_cast<uint32_t*>(&program), sizeof(program)) == SPI_FLASH_RESULT_OK) {
-      success = 1;
-    }
-  }
-  interrupts();
+  // program.magicNumber = programMagicNumber;
+  // program.formatVersion = 1;
+  // noInterrupts();
+  // if(spi_flash_erase_sector(_sector) == SPI_FLASH_RESULT_OK) {
+  //   if(spi_flash_write(_sector * SPI_FLASH_SEC_SIZE, reinterpret_cast<uint32_t*>(&program), sizeof(program)) == SPI_FLASH_RESULT_OK) {
+  //     success = 1;
+  //   }
+  // }
+  // interrupts();
   return success;
 }
 
 int restoreProgram() {
   int success = 0;
-  noInterrupts();
-  if(spi_flash_read(_sector * SPI_FLASH_SEC_SIZE, reinterpret_cast<uint32_t*>(&program), sizeof(program)) == SPI_FLASH_RESULT_OK) {
-    if (program.magicNumber == programMagicNumber) {
-      success = 1;
-    } else {
+  // noInterrupts();
+  // if(spi_flash_read(_sector * SPI_FLASH_SEC_SIZE, reinterpret_cast<uint32_t*>(&program), sizeof(program)) == SPI_FLASH_RESULT_OK) {
+  //   if (program.magicNumber == programMagicNumber) {
+  //     success = 1;
+  //   } else {
       // flash did not contain a valid program - clear it
       // Serial.println("restoreProgram: not valid program in flash");
       program.stepCount = 0;
       program.formatVersion = 1;
-    }
-  }
-  interrupts();
+  //   }
+  // }
+  // interrupts();
   return success;
 }
 
@@ -144,27 +136,6 @@ void httpRespond(WiFiClient client, int status, const char *contentType) {
   client.println(""); // mark end of headers
 }
 
-#if WEBAPP
-bool loadFromFlash(WiFiClient &client, String path) {
-  if (path.endsWith("/")) path += "index.html";
-  int NumFiles = sizeof(files)/sizeof(struct t_websitefiles);
-  for (int i=0; i<NumFiles; i++) {
-    if (path.endsWith(String(files[i].filename))) {
-      client.println("HTTP/1.1 200 OK");
-      client.print("Content-Type: "); client.println(files[i].mime);
-      client.print("Content-Length"); client.println(String(files[i].len));
-      client.println(""); //  do not forget this one
-      _FLASH_ARRAY<uint8_t>* filecontent = (_FLASH_ARRAY<uint8_t>*)files[i].content;
-      filecontent->open();
-      client.write(*filecontent, 100);
-      return true;
-    }
-  }
-  httpRespond(client, 201);
-  return false;
-}
-#endif
-
 // convert string representation into referenced Step
 // s is t,p,p,p,p,p,p,p
 // omittes numbers are not set
@@ -194,26 +165,26 @@ int stringToStep(String s, Step &step) {
   return true;
 }
 
-void printStepsJson(WiFiClient client) {
-  client.println("[");
+void printStepsJson(AsyncResponseStream *response) {
+  response->println("[");
   for (int i = 0; i < program.stepCount; i++) {
-    client.print("  {\"timeToStep\": ");
+    response->print("  {\"timeToStep\": ");
     int t = program.steps[i].stepTime;
-    client.print(t / 10); client.print("."); client.print(t % 10);
-    client.print(", \"positions\": [");
+    response->print(t / 10); response->print("."); response->print(t % 10);
+    response->print(", \"positions\": [");
     for (int j = 0; j < SERVO_COUNT; j++) {
       if (j > 0) {
-        client.print(", ");
+        response->print(", ");
       }
-      client.print(program.steps[i].pos[j]);
+      response->print(program.steps[i].pos[j]);
     }
-    client.print("]}");
+    response->print("]}");
     if (i < program.stepCount - 1) {
-      client.print(",");
+      response->print(",");
     }
-    client.println("");
+    response->println("");
   }
-  client.println("]");
+  response->println("]");
 }
 
 String getRequestQuery(String s) {
@@ -228,10 +199,6 @@ void runProgram() {
       program.steps[i].moveTo();
     }
   }
-}
-
-int parseIntUntil(String s, int &intResult, int &startI) {
-  return parseIntUntil(s, intResult, startI, 0);
 }
 
 int parseIntUntil(String s, int &intResult, int &startI, char endChar) {
@@ -250,21 +217,8 @@ int parseStringToEnd(String s, String &stringResult, int &startI) {
   return 1;
 }
 
-void handleRoot() {
-  server.send(200, "text/plain", "hello from esp8266!");
-}
-
-void logRequest() {
-  // Serial.println(server.uri());
-  for (int i = 0; i < server.headers(); i++) {
-    // Serial.print(server.headerName(i));
-    // Serial.print(": ");
-    // Serial.print(server.header(i));
-  }
-}
-
-void handleNotFound(){
-  String query = server.uri();
+void handleNotFound(AsyncWebServerRequest *request) {
+  String query = request->url();
   if (query.startsWith("/add/")) {
     // /add/i/t,p,p,p,p,p,p
     // inserts a new step at specified pos
@@ -281,17 +235,17 @@ void handleNotFound(){
         }
         program.stepCount++;
         stringToStep(stepString, program.steps[stepi]);
-        server.send(200, "application/json", "1");
+        request->send(200, "application/json", "1");
         return;
       }
     }
-    server.send(400);
+    request->send(400);
   }
   else if (query.startsWith("/remove/")) {
     int stepi, stepn;
     int i = 8;
     if (parseIntUntil(query, stepi, i, '/')
-        && parseIntUntil(query, stepn, i)
+        && parseIntUntil(query, stepn, i, 0)
         && 0 <= stepi && stepi < program.stepCount
         && 0 < stepn && stepi + stepn <= program.stepCount) {
       for (int j = 0; j < stepn; j++) {
@@ -299,14 +253,12 @@ void handleNotFound(){
         stepi++;
       }
       program.stepCount -= stepn;
-      server.send(200, "application/json", "1");
+      request->send(200, "application/json", "1");
       return;
     }
-    server.send(400);
+    request->send(400);
   } else if (query.startsWith("/set/")) {
     // move all positions to specified value at specified time
-    logRequest();
-
     int stepi, stepn;
     Step step;
     int i = 5;
@@ -314,21 +266,20 @@ void handleNotFound(){
         && 0 <= stepi && stepi < program.stepCount
         && stringToStep(query.substring(i), step)) {
       program.steps[stepi] = step;
-      server.send(200, "application/json", "1");
+      request->send(200, "application/json", "1");
     } else {
-      server.send(500, "application/json", "\"invalid step index\"");
+      request->send(500, "application/json", "\"invalid step index\"");
     }
   } else if (query.startsWith("/move/")) {
     // move all positions to specified value at specified time
-    logRequest();
-
     Step step;
     stringToStep(query.substring(5), step);
     step.moveTo();
-    server.send(200, "application/json", "1");
+    request->send(200, "application/json", "1");
 #if WEBAPP
   } else {
-    String path = request.substring(4, request.length() - 9);
+    String path = query.substring(1);
+    Serial.println(path);
     loadFromFlash(server.client(), path);
 #endif
   }
@@ -336,11 +287,19 @@ void handleNotFound(){
 
 void setup() {
   Serial.begin(115200);
+  delay(100);
   while (!Serial) {}  // wait for serial ready
   Serial.println("\nBooting");
 
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.softAP("annaservo", "hosianna"); // http://192.168.4.1/
   WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
+
+  Serial.print("connecting to: ");
+  Serial.println(ssid);
+
+  int n = 5;
+  while (WiFi.status() != WL_CONNECTED && n-- > 0) {
     delay(500);
     Serial.print(".");
   }
@@ -349,50 +308,60 @@ void setup() {
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
 
+  SPIFFS.begin();
 
-  server.on("/", handleRoot);
 
-  server.on("/stepCount", [](){
-    server.send(200, "text/plain", String(program.stepCount));
+  // server.on("/stepCount", [](){
+  webServer.on("/stepCount", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send(200, "text/plain", String(program.stepCount));
   });
 
-  server.on("/save", [](){
-    server.send(saveProgram() ? 200 : 500, "application/json", "1");
+  // server.on("/save", [](){
+  webServer.on("/save", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send(saveProgram() ? 200 : 500, "application/json", "1");
   });
 
-  server.on("/restore", [](){
-    server.send(restoreProgram() ? 200 : 500, "application/json", "1");
+  // server.on("/restore", [](){
+  webServer.on("/restore", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send(restoreProgram() ? 200 : 500, "application/json", "1");
   });
 
-  server.on("/start", [](){
+  // server.on("/start", [](){
+  webServer.on("/start", HTTP_GET, [](AsyncWebServerRequest *request) {
     runMode = true;
-    server.send(200, "application/json", "1");
+    request->send(200, "application/json", "1");
   });
 
-  server.on("/stop", [](){
+  // server.on("/stop", [](){
+  webServer.on("/stop", HTTP_GET, [](AsyncWebServerRequest *request) {
     runMode = false;
-    server.send(200, "application/json", "1");
+    request->send(200, "application/json", "1");
   });
 
-  server.on("/steps", [](){
-    WiFiClient client = server.client();
-    httpRespond(client, 200, "application/json");
-    printStepsJson(client);
+  webServer.on("/steps", HTTP_GET, [](AsyncWebServerRequest *request) {
+    AsyncResponseStream *response = request->beginResponseStream("application/json");
+    response->addHeader("Server","ESP Async Web Server");
+    response->printf("<!DOCTYPE html><html><head><title>Webpage at %s</title></head><body>", request->url().c_str());
+
+    printStepsJson(response);
+
+    request->send(response);
   });
 
-  server.onNotFound(handleNotFound);
+  webServer.serveStatic("/", SPIFFS, "/").setDefaultFile("index.html");
 
-  server.begin();
+  webServer.onNotFound(handleNotFound);
+
+  webServer.begin();
   // Serial.println("HTTP server started");
 
   attachServos();
   restoreProgram();
-  runMode = true;
+  runMode = false;
 }
 
 
 void loop() {
-  server.handleClient();
   if (runMode && program.stepCount > 0) {
     if (nextStep >= program.stepCount) {
       nextStep = 0;
